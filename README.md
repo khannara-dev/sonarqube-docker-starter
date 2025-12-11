@@ -250,18 +250,18 @@ docker compose logs -f
 docker compose down -v
 
 # View resource usage
-docker stats sonarqube sonarqube-db
+docker stats jenkins sonarqube sonarqube-db
 ```
 
 ## Resource Requirements
 
 | Resource | Minimum | Recommended |
 |----------|---------|-------------|
-| **RAM** | 2GB | 4GB |
-| **Disk** | 1GB | 5GB |
+| **RAM** | 4GB | 8GB |
+| **Disk** | 2GB | 10GB |
 | **CPU** | 2 cores | 4 cores |
 
-Docker Desktop should have at least 4GB RAM allocated.
+Docker Desktop should have at least 6GB RAM allocated (Jenkins ~1GB + SonarQube ~2-3GB + PostgreSQL ~256MB).
 
 ## Quality Gate Configuration
 
