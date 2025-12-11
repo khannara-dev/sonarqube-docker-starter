@@ -1,6 +1,6 @@
-# SonarQube Docker Starter
+# Local CI/CD Infrastructure: Jenkins + SonarQube
 
-A ready-to-use local SonarQube setup with Docker Compose. Perfect for unlimited code quality analysis of private repositories without SonarCloud's line limits.
+A ready-to-use local CI/CD stack with Jenkins and SonarQube via Docker Compose. Perfect for enterprise-grade pipelines and unlimited code quality analysis without cloud limitations.
 
 ## Why Local SonarQube?
 
@@ -12,6 +12,14 @@ A ready-to-use local SonarQube setup with Docker Compose. Perfect for unlimited 
 | Monthly cost | $14+/month | **$0** |
 | Data privacy | Cloud | **Your machine** |
 
+## Services Included
+
+| Service | Port | Purpose |
+|---------|------|---------|
+| **Jenkins** | 8080 | CI/CD automation server |
+| **SonarQube** | 9000 | Code quality & security analysis |
+| **PostgreSQL** | (internal) | SonarQube database |
+
 ## Quick Start
 
 ```bash
@@ -19,21 +27,94 @@ A ready-to-use local SonarQube setup with Docker Compose. Perfect for unlimited 
 git clone https://github.com/khannara/sonarqube-docker-starter.git
 cd sonarqube-docker-starter
 
-# Start SonarQube (first run downloads ~800MB)
+# Start all services (first run downloads ~1.5GB)
 docker compose up -d
 
-# Wait for startup (~1-2 minutes)
-docker compose logs -f sonarqube
-# Look for: "SonarQube is operational"
+# Wait for startup (~2-3 minutes)
+docker compose logs -f
 ```
 
 ## Access
 
+### Jenkins
+| Item | Value |
+|------|-------|
+| **URL** | http://localhost:8080 |
+| **Initial Password** | `docker logs jenkins` (first line contains unlock key) |
+| **First Login** | Complete setup wizard, install suggested plugins |
+
+### SonarQube
 | Item | Value |
 |------|-------|
 | **URL** | http://localhost:9000 |
 | **Default Login** | admin / admin |
 | **First Login** | You'll be prompted to change password |
+
+---
+
+## Jenkins Setup
+
+### 1. Initial Setup
+
+After first start, get the initial admin password:
+```bash
+docker logs jenkins 2>&1 | grep -A 2 "initial"
+```
+
+### 2. Install Plugins
+
+During setup wizard, install **suggested plugins**, then add these essential ones:
+- **NodeJS Plugin** - For npm/node projects
+- **SonarQube Scanner** - Code quality integration
+- **Discord Notifier** - Build notifications (optional)
+
+Or install via CLI:
+```bash
+docker exec jenkins jenkins-plugin-cli --plugins nodejs sonar discord-notifier
+docker restart jenkins
+```
+
+### 3. Configure NodeJS
+
+1. **Manage Jenkins** → **Tools**
+2. Under **NodeJS installations**, click **Add NodeJS**
+   - Name: `NodeJS-20`
+   - Version: `NodeJS 20.x`
+   - Install automatically: ✓
+3. Save
+
+### 4. Configure SonarQube Server
+
+1. **Manage Jenkins** → **System**
+2. Under **SonarQube servers**, click **Add SonarQube**
+   - Name: `SonarQube-Local`
+   - Server URL: `http://sonarqube:9000` (Docker internal network)
+   - Server authentication token: (create in SonarQube, add as credential)
+3. Save
+
+### 5. Configure Credentials
+
+1. **Manage Jenkins** → **Credentials** → **System** → **Global credentials**
+2. Add credentials for:
+   - `sonarqube-token` (Secret text) - SonarQube analysis token
+   - `github-credentials` (Username with password/PAT)
+   - `discord-webhook-builds` (Secret text) - Discord webhook URL
+   - `npm-token` (Secret text) - GitHub Packages token (if using private packages)
+
+### 6. Create Pipeline Job
+
+1. **New Item** → Enter name → Select **Pipeline**
+2. Configure:
+   - **Pipeline from SCM**: Git
+   - **Repository URL**: `https://github.com/khannara/your-repo.git`
+   - **Script Path**: `Jenkinsfile`
+3. Save & Build
+
+### Jenkinsfile Template
+
+See `templates/Jenkinsfile.template` for a complete example that mirrors Azure DevOps pipeline patterns.
+
+---
 
 ## Generate Analysis Token
 

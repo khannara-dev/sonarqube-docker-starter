@@ -1,0 +1,187 @@
+// Jenkins Pipeline Template for Kaytee Ecosystem Projects
+// Converted from Azure DevOps Pipeline patterns
+//
+// Prerequisites:
+// - NodeJS plugin configured with Node 20.x installation named 'NodeJS-20'
+// - SonarQube Scanner plugin configured with server 'SonarQube-Local'
+// - Discord webhook credentials stored as 'discord-webhook-builds'
+// - GitHub credentials stored as 'github-credentials'
+
+pipeline {
+    agent any
+
+    environment {
+        NODE_VERSION = '20'
+        CI = 'true'
+        // Credentials - reference Jenkins credentials store
+        NPM_TOKEN = credentials('npm-token')
+        SONAR_TOKEN = credentials('sonarqube-token')
+        DISCORD_WEBHOOK = credentials('discord-webhook-builds')
+        // Database/service URLs - set in Jenkins global config or job config
+        MONGODB_URI = credentials('mongodb-uri-test')
+        MONGODB_DATABASE = 'kaytee-tropical-dashboard-test'
+        NEXTAUTH_SECRET = 'test-secret-for-ci'
+        NEXTAUTH_URL = 'http://localhost:3000'
+    }
+
+    triggers {
+        // Equivalent to Azure DevOps triggers
+        pollSCM('H/5 * * * *')  // Poll every 5 minutes
+        cron('0 2 * * *')       // Daily at 2 AM UTC (scheduled tests)
+    }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+        timeout(time: 30, unit: 'MINUTES')
+        timestamps()
+        disableConcurrentBuilds()
+    }
+
+    stages {
+        stage('Setup') {
+            steps {
+                script {
+                    // Configure npm for GitHub packages
+                    sh '''
+                        echo "//npm.pkg.github.com/:_authToken=${NPM_TOKEN}" >> .npmrc
+                    '''
+                }
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                nodejs(nodeJSInstallationName: 'NodeJS-20') {
+                    sh 'npm ci'
+                }
+            }
+        }
+
+        stage('Quality Gates') {
+            parallel {
+                stage('Lint') {
+                    steps {
+                        nodejs(nodeJSInstallationName: 'NodeJS-20') {
+                            sh 'npm run lint || true'  // continueOnError equivalent
+                        }
+                    }
+                }
+
+                stage('Security Audit') {
+                    steps {
+                        nodejs(nodeJSInstallationName: 'NodeJS-20') {
+                            sh 'npm audit --audit-level=high --omit=dev'
+                        }
+                    }
+                }
+
+                stage('Type Check') {
+                    steps {
+                        nodejs(nodeJSInstallationName: 'NodeJS-20') {
+                            sh 'npm run type-check || npm run build -- --no-lint'
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Unit Tests') {
+            steps {
+                nodejs(nodeJSInstallationName: 'NodeJS-20') {
+                    sh 'npm run test:coverage'
+                }
+            }
+            post {
+                always {
+                    // Publish JUnit test results if available
+                    junit allowEmptyResults: true, testResults: '**/junit.xml'
+                    // Publish coverage
+                    publishCoverage adapters: [coberturaAdapter('coverage/cobertura-coverage.xml')]
+                }
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            steps {
+                withSonarQubeEnv('SonarQube-Local') {
+                    nodejs(nodeJSInstallationName: 'NodeJS-20') {
+                        sh '''
+                            npx sonar-scanner \
+                                -Dsonar.projectKey=${JOB_NAME} \
+                                -Dsonar.projectName=${JOB_NAME} \
+                                -Dsonar.sources=src \
+                                -Dsonar.exclusions="**/*.test.ts,**/*.test.tsx,**/__tests__/**,**/node_modules/**,**/*.d.ts,.next/**" \
+                                -Dsonar.tests=src \
+                                -Dsonar.test.inclusions="**/*.test.ts,**/*.test.tsx,**/__tests__/**" \
+                                -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info \
+                                -Dsonar.typescript.tsconfigPath=tsconfig.json
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('SonarQube Quality Gate') {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: false  // Set to true for strict enforcement
+                }
+            }
+        }
+
+        stage('Build') {
+            steps {
+                nodejs(nodeJSInstallationName: 'NodeJS-20') {
+                    sh 'npm run build'
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            // Clean workspace
+            cleanWs()
+        }
+
+        success {
+            script {
+                discordNotify('SUCCESS')
+            }
+        }
+
+        failure {
+            script {
+                discordNotify('FAILURE')
+            }
+        }
+    }
+}
+
+// Helper function for Discord notifications
+def discordNotify(String status) {
+    def color = status == 'SUCCESS' ? 3066993 : 15158332
+    def emoji = status == 'SUCCESS' ? '✅' : '❌'
+
+    def payload = """
+    {
+        "embeds": [{
+            "title": "${emoji} ${env.JOB_NAME}",
+            "description": "Build #${env.BUILD_NUMBER} ${status}",
+            "color": ${color},
+            "fields": [
+                {"name": "Branch", "value": "`${env.GIT_BRANCH}`", "inline": true},
+                {"name": "Commit", "value": "`${env.GIT_COMMIT?.take(7)}`", "inline": true},
+                {"name": "Pipeline", "value": "[View Build](${env.BUILD_URL})", "inline": false}
+            ],
+            "footer": {"text": "Jenkins CI"}
+        }]
+    }
+    """
+
+    sh """
+        curl -s -X POST -H "Content-Type: application/json" \
+            -d '${payload}' \
+            "${DISCORD_WEBHOOK}"
+    """
+}
